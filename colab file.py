@@ -1,21 +1,21 @@
 !nvidia-smi
 
-
+---------------------------------------------------------------------------------------------------------------
 from google.colab import drive
 drive.mount('/content/drive')
 
-
+---------------------------------------------------------------------------------------------------------------
 !pip install -i https://test.pypi.org/simple/ supervision==0.3.0
 !pip install -q transformers
 !pip install -q pytorch-lightning
 !pip install -q roboflow
 !pip install -q timm
 
-
+---------------------------------------------------------------------------------------------------------------
 %cd {HOME}
 !wget https://media.roboflow.com/notebooks/examples/dog.jpeg
 
-
+---------------------------------------------------------------------------------------------------------------
 import os
 HOME = os.getcwd()
 print(HOME)
@@ -23,8 +23,9 @@ IMAGE_NAME = "dog.jpeg"
 IMAGE_PATH = os.path.join(HOME, IMAGE_NAME)
 
 
-
+---------------------------------------------------------------------------------------------------------------
 Loading model
+---------------------------------------------------------------------------------------------------------------
 import torch
 from transformers import DetrForObjectDetection, DetrImageProcessor
 
@@ -40,11 +41,11 @@ model = DetrForObjectDetection.from_pretrained(CHECKPOINT)
 model.to(DEVICE)
 
 
-
+---------------------------------------------------------------------------------------------------------------
 !pip install supervision
 
 
-
+---------------------------------------------------------------------------------------------------------------
 import cv2
 import torch
 import supervision as sv
@@ -120,18 +121,21 @@ plt.show()
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 Checking done inference , now make dataset
 import os
 import torchvision
 from transformers import AutoProcessor  # Assuming you're using a processor like AutoProcessor for image pre-processing
+
 # settings
 ANNOTATION_FILE_NAME = "_annotations.coco.json"
+
 # Update dataset location (assuming the dataset is in Google Drive)
 DATASET_LOCATION = "/content/drive/MyDrive/colab_files/wildcocodataset"
 TRAIN_DIRECTORY = os.path.join(DATASET_LOCATION, "train")
 VAL_DIRECTORY = os.path.join(DATASET_LOCATION, "valid")
 TEST_DIRECTORY = os.path.join(DATASET_LOCATION, "test")
+
 # You need an image processor (e.g., from HuggingFace Transformers)
 # If you're using a pre-trained model like a DETR processor or any other, initialize it here.
 image_processor = AutoProcessor.from_pretrained("facebook/detr-resnet-50")
@@ -161,6 +165,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         target = encoding["labels"][0]
 
         return pixel_values, target
+
 # Create instances of the dataset for train, validation, and test sets
 TRAIN_DATASET = CocoDetection(
     image_directory_path=TRAIN_DIRECTORY,
@@ -177,6 +182,7 @@ TEST_DATASET = CocoDetection(
     image_processor=image_processor,
     train=False
 )
+
 # Print out the dataset sizes
 print("Number of training examples:", len(TRAIN_DATASET))
 print("Number of validation examples:", len(VAL_DATASET))
@@ -188,8 +194,9 @@ print("Number of test examples:", len(TEST_DATASET))
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 **Now after loading the data.......make some visualizations **
+---------------------------------------------------------------------------------------------------------------
 import random
 import cv2
 import numpy as np
@@ -236,7 +243,7 @@ sv.show_frame_in_notebook(image, (8, 8))
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 from torch.utils.data import DataLoader
 
 def collate_fn(batch):
@@ -260,8 +267,9 @@ TEST_DATALOADER = DataLoader(dataset=TEST_DATASET, collate_fn=collate_fn, batch_
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 Train model with PyTorch Lightning
+---------------------------------------------------------------------------------------------------------------
 !pip install pytorch-lightning -q
 
 
@@ -269,7 +277,7 @@ Train model with PyTorch Lightning
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 import pytorch_lightning as pl
 from transformers import DetrForObjectDetection
 import torch
@@ -347,7 +355,7 @@ class Detr(pl.LightningModule):
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 %cd {HOME}
 
 %load_ext tensorboard
@@ -357,22 +365,26 @@ class Detr(pl.LightningModule):
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 model = Detr(lr=1e-4, lr_backbone=1e-5, weight_decay=1e-4)
 
 batch = next(iter(TRAIN_DATALOADER))
 outputs = model(pixel_values=batch['pixel_values'], pixel_mask=batch['pixel_mask'])
 
 
+
+---------------------------------------------------------------------------------------------------------------
 outputs.logits.shape
 
 
+
+---------------------------------------------------------------------------------------------------------------
 import pytorch_lightning as pl
 print(pl.__version__)
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 batch = next(iter(TRAIN_DATALOADER))
 print(type(batch))            # the batch type
 print(batch.keys())           # keys in the dict
@@ -382,7 +394,7 @@ print(batch["labels"][:2])    # see first two elements
 
 
 
-
+---------------------------------------------------------------------------------------------------------------
 from pytorch_lightning import Trainer
 
 %cd {HOME}
