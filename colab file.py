@@ -114,6 +114,113 @@ plt.figure(figsize=(16, 16))
 plt.imshow(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 plt.axis('off')  # Hide axes for a cleaner view
 plt.show()
+|
+|
+|
+|
+|
+For another version...of supervision (new)
+---------------------------------------------------------------------------------------------------------------
+# pip install torch torchvision transformers==4.45.0 pillow opencv-python supervision==0.26.1 matplotlib
+
+import cv2
+import torch
+import numpy as np
+import supervision as sv
+import matplotlib.pyplot as plt
+from transformers import DetrForObjectDetection, DetrImageProcessor
+
+# ---------- Config ----------
+IMAGE_PATH = "dog.jpeg"  # replace with your image path
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+CHECKPOINT = "facebook/detr-resnet-50"
+CONFIDENCE_THRESHOLD = 0.5
+
+# ---------- Load model ----------
+image_processor = DetrImageProcessor.from_pretrained(CHECKPOINT)
+model = DetrForObjectDetection.from_pretrained(CHECKPOINT).to(DEVICE).eval()
+
+# ---------- COCO labels (DETR expects 91 ids; these match the processor's post-processing) ----------
+coco_labels = [
+    "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
+    "traffic light","fire hydrant","street sign","stop sign","parking meter","bench",
+    "bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe",
+    "hat","backpack","umbrella","shoe","eye glasses","handbag","tie","suitcase",
+    "frisbee","skis","snowboard","sports ball","kite","baseball bat","baseball glove",
+    "skateboard","surfboard","tennis racket","bottle","plate","wine glass","cup",
+    "fork","knife","spoon","bowl","banana","apple","sandwich","orange","broccoli",
+    "carrot","hot dog","pizza","donut","cake","chair","couch","potted plant","bed",
+    "mirror","dining table","window","desk","toilet","door","tv","laptop","mouse",
+    "remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator",
+    "blender","book","clock","vase","scissors","teddy bear","hair drier","toothbrush",
+    "hair brush"
+]
+
+# ---------- Load image ----------
+image_bgr = cv2.imread(IMAGE_PATH)
+if image_bgr is None:
+    raise FileNotFoundError(f"Could not read image at path: {IMAGE_PATH}")
+image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+
+# ---------- Inference ----------
+with torch.no_grad():
+    inputs = image_processor(images=image_rgb, return_tensors="pt").to(DEVICE)
+    outputs = model(**inputs)
+
+target_sizes = torch.tensor([image_rgb.shape[:2]]).to(DEVICE)  # (h, w)
+post = image_processor.post_process_object_detection(
+    outputs=outputs, threshold=CONFIDENCE_THRESHOLD, target_sizes=target_sizes
+)[0]
+
+# ---------- Convert to numpy ----------
+boxes = post["boxes"].cpu().numpy()        # [N, 4] xyxy
+scores = post["scores"].cpu().numpy()      # [N]
+class_ids = post["labels"].cpu().numpy()   # [N]
+
+# ---------- Supervision Detections ----------
+detections = sv.Detections(
+    xyxy=boxes.astype(np.float32),
+    confidence=scores.astype(np.float32),
+    class_id=class_ids.astype(np.int32),
+).with_nms(threshold=0.5)  # ✅ Apply NMS here
+
+# Adjust class IDs (if needed)
+adjusted_class_ids = [cid - 1 for cid in detections.class_id]
+
+# Build readable labels
+labels = [
+    f"{coco_labels[cid]} {score:.2f}"
+    for cid, score in zip(adjusted_class_ids, detections.confidence)
+]
+
+# ---------- Annotate ----------
+box_annotator = sv.BoxAnnotator(thickness=3)
+label_annotator = sv.LabelAnnotator(text_thickness=1, text_scale=0.6, text_padding=4)
+
+annotated = box_annotator.annotate(scene=image_rgb.copy(), detections=detections)
+annotated = label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
+
+# # Print the labels
+print("\nDetected Labels:")
+print(labels)
+
+# Print out the detections to see what we are passing to the BoxAnnotator
+print("Bounding Box Coordinates (xyxy):")
+print(detections.xyxy)
+
+print("\nConfidence Scores:")
+print(detections.confidence)
+
+print("\nClass IDs (adjusted):")
+print(adjusted_class_ids)
+
+
+# ---------- Show ----------
+plt.figure(figsize=(12, 12))
+plt.imshow(annotated)
+plt.axis("off")
+plt.tight_layout()
+plt.show()
 
 
 
