@@ -307,41 +307,82 @@ print("Number of test examples:", len(TEST_DATASET))
 import random
 import cv2
 import numpy as np
+import supervision as sv
+import os
 
-
-# select random image
+# select random image from COCO dataset
 image_ids = TRAIN_DATASET.coco.getImgIds()
 image_id = random.choice(image_ids)
-# print('Image #{}'.format(image_id))
 
-# load image and annotatons
+# load image and annotations
 image = TRAIN_DATASET.coco.loadImgs(image_id)[0]
 annotations = TRAIN_DATASET.coco.imgToAnns[image_id]
 image_path = os.path.join(TRAIN_DATASET.root, image['file_name'])
 
-print(image_path)
+# Read the image using OpenCV
 image = cv2.imread(image_path)
-# print(image)
-# print("its", annotations[:5])
+print(image)
 
-# annotate
-detections = sv.Detections.from_coco_annotations(coco_annotation=annotations)
+# # Manually create detections from annotations
+detections_list = []
+class_ids = []  # This will store the class IDs for each detection
+for annotation in annotations:
+    # COCO format bbox is [x_min, y_min, width, height]
+    x_min, y_min, width, height = annotation['bbox']
+    x_max = x_min + width
+    y_max = y_min + height
+    class_id = annotation['category_id']
+    
+    # Append the detection as [x_min, y_min, x_max, y_max]
+    detections_list.append([x_min, y_min, x_max, y_max])
+    class_ids.append(class_id)  # Store class_id for each detection
 
-# we will use id2label function for training
+print(detections_list)
+print(class_ids)
+
+# # Convert detections to a NumPy array with shape (N, 4)
+xyxy = np.array(detections_list, dtype=np.float32)
+print(xyxy)
+
+# # Convert class_ids to a numpy array to ensure it's a 1D array
+class_ids = np.array(class_ids, dtype=np.int32)
+print(class_ids)
+
+# # Create the Detections object, passing the class IDs as well
+detections = sv.Detections(xyxy=xyxy, class_id=class_ids)
+print(detections)
+
+# # Create a label map from category IDs to names
 categories = TRAIN_DATASET.coco.cats
-id2label = {k: v['name'] for k,v in categories.items()}
+print(categories)
+id2label = {k: v['name'] for k, v in categories.items()}
+print(id2label)
 
+# # Generate labels for each detection using id2label
 labels = [
-    f"{id2label[class_id]}"
-    for _, _, class_id, _
-    in detections
+    f"{id2label[class_id]}"  # Generate the label for each class ID
+    for class_id in class_ids
 ]
+print(labels)
 
-box_annotator = sv.BoxAnnotator()
-frame = box_annotator.annotate(scene=image, detections=detections, labels=labels)
+# # Add labels to the detections object manually
+detections.text = labels  # This step attaches the labels to the detections
+print(detections.text)
+ 
+# Initialize BoxAnnotator -> for box and LabelAnnotator  -> and showing the labels    
+box_annotator = sv.BoxAnnotator()        
+label_annotator = sv.LabelAnnotator(text_thickness=1, text_scale=0.6, text_padding=4)
 
-%matplotlib inline
-sv.show_frame_in_notebook(image, (8, 8))
+# Annotate the image with bounding boxes and labels
+frame = box_annotator.annotate(scene=image, detections=detections)
+frame = label_annotator.annotate(scene=frame, detections=detections, labels=labels)
+
+# Display the result
+plt.figure(figsize=(12, 12))  # Set the figure size (optional, for better visualization)
+plt.imshow(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))  # Convert from BGR to RGB
+plt.axis("off")  # Turn off the axis labels and ticks
+plt.tight_layout()  # Ensure everything fits without overlap
+plt.show()  # Show the image
 
 
 
