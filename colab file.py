@@ -599,104 +599,157 @@ save trained model
 visualize
 
 
-trained_model = DetrForObjectDetection.from_pretrained(
-    pretrained_model_name_or_path=None,
-    num_labels=len(id2label)
-)
-trained_model.load_state_dict(torch.load("detr_custom_5class.ckpt")["state_dict"])
-trained_model.to(DEVICE)
-trained_model.eval()
 
-
-
-
-
--------------------------------------------------------------------------------------------------------------------
-now seee on random image
-
-import os
-import random
+1.
+from transformers import DetrForObjectDetection, DetrImageProcessor
 import torch
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Initialize model with correct number of classes
+model = DetrForObjectDetection.from_pretrained(
+    pretrained_model_name_or_path=None,
+    num_labels=5
+)
+
+# Load the trained Lightning checkpoint
+ckpt = torch.load("lightning_logs/version_1/checkpoints/epoch=29-step=3030.ckpt", map_location=DEVICE)
+model.load_state_dict(ckpt["state_dict"])
+
+model.to(DEVICE).eval()
+
+# Initialize DETR processor
+processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
+
+
+
+2.
+import os
 from PIL import Image
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from transformers import DetrImageProcessor, DetrForObjectDetection
 
-# ---------------------------
-# 1️⃣  Setup
-# ---------------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Path to test images folder
 test_dir = "/kaggle/input/wildcocodataset/wildcocodataset/test"
 
-# Collect all valid image paths
+# Get all valid image paths
 image_paths = [
-    os.path.join(test_dir, img)
-    for img in os.listdir(test_dir)
-    if img.lower().endswith((".jpg", ".jpeg", ".png"))
+    os.path.join(test_dir, f)
+    for f in os.listdir(test_dir)
+    if f.lower().endswith((".jpg", ".jpeg", ".png"))
 ]
 
-print(f"Found {len(image_paths)} images in test folder")
+print(f"Found {len(image_paths)} test images")
+
+
+
+
+
+
+
+
+
+3.
 
 # ---------------------------
-# 2️⃣  Load your model
+# 2️⃣ Prepare CSV
 # ---------------------------
-processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
-model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
-
-# Load your trained weights
-state_dict = torch.load("/kaggle/input/final-model/pytorch/default/1/final_trained_model.pth", map_location=device)
-model.load_state_dict(state_dict, strict=False)
-model.to(device).eval()
-
-# Map label IDs to names
-id2label = model.config.id2label
+results_list = []
 
 # ---------------------------
-# 3️⃣  Pick a few random images
+# 3️⃣ Run inference and save results
 # ---------------------------
-num_samples = 5
-sample_images = random.sample(image_paths, num_samples)
-
-# ---------------------------
-# 4️⃣  Run inference and visualize
-# ---------------------------
-for img_path in sample_images:
-    try:
-        image = Image.open(img_path).convert("RGB")
-    except:
-        print(f"⚠️ Skipping corrupted image: {img_path}")
-        continue
-
-    inputs = processor(images=image, return_tensors="pt").to(device)
+for img_path in image_paths:
+    image_name = os.path.basename(img_path)
+    image = Image.open(img_path).convert("RGB")
+    inputs = processor(images=image, return_tensors="pt").to(DEVICE)
 
     with torch.no_grad():
         outputs = model(**inputs)
 
     # Post-process predictions
     results = processor.post_process_object_detection(
-        outputs, target_sizes=[image.size[::-1]]
+        outputs, target_sizes=[image.size[::-1]], threshold=0.5
     )[0]
 
     boxes = results["boxes"].cpu()
     scores = results["scores"].cpu()
     labels = results["labels"].cpu()
 
-    # Visualization
+    # Save predictions to list
+    for box, score, label in zip(boxes, scores, labels):
+        if score < 0.5:
+            continue
+        xmin, ymin, xmax, ymax = box.tolist()
+        results_list.append({
+            "image_name": image_name,
+            "class_id": int(label),
+            "score": float(score),
+            "xmin": xmin,
+            "ymin": ymin,
+            "xmax": xmax,
+            "ymax": ymax
+        })
+
+    # Optional: visualize
     fig, ax = plt.subplots(1, figsize=(10, 8))
     ax.imshow(image)
-
     for box, score, label in zip(boxes, scores, labels):
-        if score < 0.5:  # show only confident detections
+        if score < 0.5:
             continue
         xmin, ymin, xmax, ymax = box
         rect = patches.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
                                  linewidth=2, edgecolor='lime', facecolor='none')
         ax.add_patch(rect)
-        ax.text(xmin, ymin - 5, f"{id2label[int(label)]}: {score:.2f}",
+        ax.text(xmin, ymin - 5, f"Class {int(label)}: {score:.2f}",
+                color='yellow', fontsize=10, weight='bold')
+    plt.axis('off')
+    plt.show()
+
+# ---------------------------
+# 4️⃣ Save all results to CSV
+# ---------------------------
+csv_path = "detr_test_results.csv"
+df = pd.DataFrame(results_list)
+df.to_csv(csv_path, index=False)
+print(f"Saved results to {csv_path}")
+
+
+
+
+
+its saving with out saving csv-----------------====================================================
+
+4.
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+for img_path in image_paths:
+    image = Image.open(img_path).convert("RGB")
+    inputs = processor(images=image, return_tensors="pt").to(DEVICE)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # Post-process predictions
+    results = processor.post_process_object_detection(
+        outputs, target_sizes=[image.size[::-1]], threshold=0.5
+    )[0]
+
+    boxes = results["boxes"].cpu()
+    scores = results["scores"].cpu()
+    labels = results["labels"].cpu()
+
+    # Visualize
+    fig, ax = plt.subplots(1, figsize=(10, 8))
+    ax.imshow(image)
+
+    for box, score, label in zip(boxes, scores, labels):
+        if score < 0.5:
+            continue
+        xmin, ymin, xmax, ymax = box
+        rect = patches.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
+                                 linewidth=2, edgecolor='lime', facecolor='none')
+        ax.add_patch(rect)
+        ax.text(xmin, ymin - 5, f"Class {int(label)}: {score:.2f}",
                 color='yellow', fontsize=10, weight='bold')
 
     plt.axis('off')
     plt.show()
-
