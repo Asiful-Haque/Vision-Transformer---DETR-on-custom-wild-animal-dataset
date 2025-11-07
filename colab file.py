@@ -753,3 +753,43 @@ for img_path in image_paths:
 
     plt.axis('off')
     plt.show()
+
+
+
+    =============================================================================================================================================================================================
+                                                                                        ckpt vs pth file 
+    =============================================================================================================================================================================================
+
+
+Yes ✅ exactly — you can replace the .ckpt with a .pth file, but there’s a slight difference in how you load them:
+
+1️⃣ When using a Lightning checkpoint (.ckpt)
+        ckpt = torch.load("epoch=29-step=3030.ckpt", map_location=DEVICE)
+        model.load_state_dict(ckpt["state_dict"])
+            
+.ckpt contains a dictionary with keys like "state_dict", "optimizer_states", etc.
+That’s why you use ckpt["state_dict"].
+
+2️⃣ When using a PyTorch .pth (final model) file
+        state_dict = torch.load("final_trained_model.pth", map_location=DEVICE)
+        model.load_state_dict(state_dict)
+            
+.pth is usually just the state_dict (weights only).
+No need to use ["state_dict"] because it’s already the weights.
+
+✅ So for your code
+Where you have:---------->
+    
+ckpt = torch.load("lightning_logs/version_1/checkpoints/epoch=29-step=3030.ckpt", map_location=DEVICE)
+model.load_state_dict(ckpt["state_dict"])
+
+If you have final_trained_model.pth, you just do:---------->
+    
+state_dict = torch.load("final_trained_model.pth", map_location=DEVICE)
+model.load_state_dict(state_dict)
+
+
+Everything else in your testing and CSV-saving code stays the same.
+💡 Tip:
+.ckpt → use if you trained with Lightning and want to resume training or test.
+.pth → use if you exported a lightweight final model for testing or deployment.
