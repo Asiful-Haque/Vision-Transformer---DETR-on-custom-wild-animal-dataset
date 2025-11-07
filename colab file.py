@@ -438,8 +438,36 @@ class Detr(pl.LightningModule):
         self.model = DetrForObjectDetection.from_pretrained(
             pretrained_model_name_or_path=CHECKPOINT, 
             num_labels=len(id2label),
-            ignore_mismatched_sizes=True
+            ignore_mismatched_sizes=True //------------------it will be false other wise not work
         )
+
+
+        //////////////////////////////////////////////////////////////////////
+        Mistake
+        /////////////////////////////////////////////////////////////////////
+        1️⃣ Using the COCO checkpoint
+                    Yes, it’s perfectly fine to start from the COCO pretrained DETR weights (facebook/detr-resnet-50).
+                    These weights are useful because the backbone already knows general features (edges, shapes, objects, etc.).
+                    You don’t need to train from scratch.
+                    2️⃣ The crucial part: ignore_mismatched_sizes
+                    If you keep ignore_mismatched_sizes=True:
+                    DETR keeps the original COCO classifier head (91 classes).
+                    Even if you set num_labels=5, the model will ignore your new 5-class head.
+                    That’s why your outputs were COCO labels like 62.
+                    Correct way: Set ignore_mismatched_sizes=False (or remove it):
+                    model = DetrForObjectDetection.from_pretrained(
+                        pretrained_model_name_or_path=CHECKPOINT,
+                        num_labels=5  # your dataset classes
+                        # ignore_mismatched_sizes=False  <-- do not include this line
+                    )
+                    PyTorch will now automatically initialize a new classifier head for your 5 classes.
+                    The backbone still uses COCO pretrained weights (good!), but the head is fresh and trainable.
+        //////////////////////////////////////////////////////////////////////
+        Mistake
+        /////////////////////////////////////////////////////////////////////
+
+
+    
         
         self.lr = lr
         self.lr_backbone = lr_backbone
