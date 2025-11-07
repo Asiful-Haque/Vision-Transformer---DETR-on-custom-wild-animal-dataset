@@ -588,3 +588,115 @@ trainer.fit(model)
 
 
 
+-------------------------------------------------------------------------------------------------------------------
+save trained model
+
+
+       trainer.save_checkpoint("detr_custom_5class.ckpt")
+
+
+-------------------------------------------------------------------------------------------------------------------
+visualize
+
+
+trained_model = DetrForObjectDetection.from_pretrained(
+    pretrained_model_name_or_path=None,
+    num_labels=len(id2label)
+)
+trained_model.load_state_dict(torch.load("detr_custom_5class.ckpt")["state_dict"])
+trained_model.to(DEVICE)
+trained_model.eval()
+
+
+
+
+
+-------------------------------------------------------------------------------------------------------------------
+now seee on random image
+
+import os
+import random
+import torch
+from PIL import Image
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from transformers import DetrImageProcessor, DetrForObjectDetection
+
+# ---------------------------
+# 1️⃣  Setup
+# ---------------------------
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Path to test images folder
+test_dir = "/kaggle/input/wildcocodataset/wildcocodataset/test"
+
+# Collect all valid image paths
+image_paths = [
+    os.path.join(test_dir, img)
+    for img in os.listdir(test_dir)
+    if img.lower().endswith((".jpg", ".jpeg", ".png"))
+]
+
+print(f"Found {len(image_paths)} images in test folder")
+
+# ---------------------------
+# 2️⃣  Load your model
+# ---------------------------
+processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
+model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50")
+
+# Load your trained weights
+state_dict = torch.load("/kaggle/input/final-model/pytorch/default/1/final_trained_model.pth", map_location=device)
+model.load_state_dict(state_dict, strict=False)
+model.to(device).eval()
+
+# Map label IDs to names
+id2label = model.config.id2label
+
+# ---------------------------
+# 3️⃣  Pick a few random images
+# ---------------------------
+num_samples = 5
+sample_images = random.sample(image_paths, num_samples)
+
+# ---------------------------
+# 4️⃣  Run inference and visualize
+# ---------------------------
+for img_path in sample_images:
+    try:
+        image = Image.open(img_path).convert("RGB")
+    except:
+        print(f"⚠️ Skipping corrupted image: {img_path}")
+        continue
+
+    inputs = processor(images=image, return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # Post-process predictions
+    results = processor.post_process_object_detection(
+        outputs, target_sizes=[image.size[::-1]]
+    )[0]
+
+    boxes = results["boxes"].cpu()
+    scores = results["scores"].cpu()
+    labels = results["labels"].cpu()
+
+    # Visualization
+    fig, ax = plt.subplots(1, figsize=(10, 8))
+    ax.imshow(image)
+
+    for box, score, label in zip(boxes, scores, labels):
+        if score < 0.5:  # show only confident detections
+            continue
+        xmin, ymin, xmax, ymax = box
+        rect = patches.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
+                                 linewidth=2, edgecolor='lime', facecolor='none')
+        ax.add_patch(rect)
+        ax.text(xmin, ymin - 5, f"{id2label[int(label)]}: {score:.2f}",
+                color='yellow', fontsize=10, weight='bold')
+
+    plt.axis('off')
+    plt.show()
+
