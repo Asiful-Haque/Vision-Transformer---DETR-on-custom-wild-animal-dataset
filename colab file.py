@@ -430,45 +430,25 @@ import pytorch_lightning as pl
 from transformers import DetrForObjectDetection
 import torch
 
+# Example placeholders (you should define these properly in your script)
+CHECKPOINT = "facebook/detr-resnet-50"   # or your custom pretrained path
+
+id2label = {0: "cheetah", 1: "elephant", 2: "fox", 3: "lion", 4: "tiger"}
+label2id = {v: k for k, v in id2label.items()}
+
+
 
 class Detr(pl.LightningModule):
 
-    def __init__(self, lr, lr_backbone, weight_decay):
+    def __init__(self, lr=1e-4, lr_backbone=1e-5, weight_decay=1e-4):
         super().__init__()
+
         self.model = DetrForObjectDetection.from_pretrained(
-            pretrained_model_name_or_path=CHECKPOINT, 
-            num_labels=len(id2label),
-            ignore_mismatched_sizes=True //------------------it will be false other wise not work
+            pretrained_model_name_or_path=CHECKPOINT,
+            num_labels=len(id2label),  # your 5 classes
+            ignore_mismatched_sizes=True  # ensures new classification head
         )
 
-
-        //////////////////////////////////////////////////////////////////////
-        Mistake
-        /////////////////////////////////////////////////////////////////////
-        1️⃣ Using the COCO checkpoint
-                    Yes, it’s perfectly fine to start from the COCO pretrained DETR weights (facebook/detr-resnet-50).
-                    These weights are useful because the backbone already knows general features (edges, shapes, objects, etc.).
-                    You don’t need to train from scratch.
-                    2️⃣ The crucial part: ignore_mismatched_sizes
-                    If you keep ignore_mismatched_sizes=True:
-                    DETR keeps the original COCO classifier head (91 classes).
-                    Even if you set num_labels=5, the model will ignore your new 5-class head.
-                    That’s why your outputs were COCO labels like 62.
-                    Correct way: Set ignore_mismatched_sizes=False (or remove it):
-                    model = DetrForObjectDetection.from_pretrained(
-                        pretrained_model_name_or_path=CHECKPOINT,
-                        num_labels=5  # your dataset classes
-                        # ignore_mismatched_sizes=False  <-- do not include this line
-                    )
-                    PyTorch will now automatically initialize a new classifier head for your 5 classes.
-                    The backbone still uses COCO pretrained weights (good!), but the head is fresh and trainable.
-        //////////////////////////////////////////////////////////////////////
-        Mistake
-        /////////////////////////////////////////////////////////////////////
-
-
-    
-        
         self.lr = lr
         self.lr_backbone = lr_backbone
         self.weight_decay = weight_decay
@@ -482,43 +462,38 @@ class Detr(pl.LightningModule):
         labels = [{k: v.to(self.device) for k, v in t.items()} for t in batch["labels"]]
 
         outputs = self.model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
-
         loss = outputs.loss
         loss_dict = outputs.loss_dict
 
         return loss, loss_dict
 
     def training_step(self, batch, batch_idx):
-        loss, loss_dict = self.common_step(batch, batch_idx)     
-        # logs metrics for each training_step, and the average across the epoch
+        loss, loss_dict = self.common_step(batch, batch_idx)
         self.log("training_loss", loss)
-        for k,v in loss_dict.items():
+        for k, v in loss_dict.items():
             self.log("train_" + k, v.item())
-
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss, loss_dict = self.common_step(batch, batch_idx)     
+        loss, loss_dict = self.common_step(batch, batch_idx)
         self.log("validation/loss", loss)
         for k, v in loss_dict.items():
             self.log("validation_" + k, v.item())
-            
         return loss
 
     def configure_optimizers(self):
-        # DETR authors decided to use different learning rate for backbone
-        # you can learn more about it here: 
-        # - https://github.com/facebookresearch/detr/blob/3af9fa878e73b6894ce3596450a8d9b89d918ca9/main.py#L22-L23
-        # - https://github.com/facebookresearch/detr/blob/3af9fa878e73b6894ce3596450a8d9b89d918ca9/main.py#L131-L139
+        # Separate backbone and non-backbone parameters with different LR
         param_dicts = [
             {
-                "params": [p for n, p in self.named_parameters() if "backbone" not in n and p.requires_grad]},
+                "params": [p for n, p in self.named_parameters() if "backbone" not in n and p.requires_grad]
+            },
             {
                 "params": [p for n, p in self.named_parameters() if "backbone" in n and p.requires_grad],
                 "lr": self.lr_backbone,
             },
         ]
-        return torch.optim.AdamW(param_dicts, lr=self.lr, weight_decay=self.weight_decay)
+        optimizer = torch.optim.AdamW(param_dicts, lr=self.lr, weight_decay=self.weight_decay)
+        return optimizer
 
     def train_dataloader(self):
         return TRAIN_DATALOADER
@@ -527,13 +502,22 @@ class Detr(pl.LightningModule):
         return VAL_DATALOADER
 
 
+# ✅ Instantiate and verify the model
+# model = Detr(lr=1e-4, lr_backbone=1e-5, weight_decay=1e-4) --- its already done in next cell
+# print(model.model.class_labels_classifier) -- its just for check actually 5 class is set or not in the model
+
+
 
 
 
 
 ---------------------------------------------------------------------------------------------------------------
+!pip uninstall tensorflow tensorboard -y
+---------------------------------------------------------------------------------------------------------------
+!pip install tensorflow==2.8.0
+!pip install tensorboard==2.8.0
 %cd {HOME}
-
+---------------------------------------------------------------------------------------------------------------
 %load_ext tensorboard
 %tensorboard --logdir lightning_logs/
 
@@ -576,7 +560,7 @@ from pytorch_lightning import Trainer
 %cd {HOME}
 
 # settings
-MAX_EPOCHS = 10
+MAX_EPOCHS = 20
 
 # pytorch_lightning < 2.0.0
 # trainer = Trainer(gpus=1, max_epochs=MAX_EPOCHS, gradient_clip_val=0.1, accumulate_grad_batches=8, log_every_n_steps=5)
@@ -589,62 +573,176 @@ trainer.fit(model)
 
 
 -------------------------------------------------------------------------------------------------------------------
+type(model.model)
+
+-------------------------------------------------------------------------------------------------------------------
 save trained model
 
 
+import shutil
+
+# Path to your logs folder
+logs_folder = "lightning_logs"
+
+# Output zip file
+zip_file = "lightning_logs.zip"
+
+# Create ZIP
+shutil.make_archive("lightning_logs", 'zip', logs_folder)
+
+print(f"Created {zip_file}")
+
+from IPython.display import FileLink
+
+# Create a clickable download link
+FileLink("lightning_logs.zip")
+
+
+
+
+
+
+
+-------------------------------------------------------------------------------------------------------------------
        trainer.save_checkpoint("detr_custom_5class.ckpt")
+
+
+-------------------------------------------------------------------------------------------------------------------
+
+import torch
+
+ckpt_path = "lightning_logs/version_0/checkpoints/epoch=4-step=505.ckpt"
+lightning_model = Detr.load_from_checkpoint(ckpt_path)
+torch.save(lightning_model.model.state_dict(), "detr_5classes.pth")
+
+
 
 
 -------------------------------------------------------------------------------------------------------------------
 visualize
 
 
-
 1.
-from transformers import DetrForObjectDetection, DetrImageProcessor
 import torch
+from transformers import DetrForObjectDetection, DetrImageProcessor
+from PIL import Image
+import requests
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Initialize model with correct number of classes
-model = DetrForObjectDetection.from_pretrained(
-    pretrained_model_name_or_path=None,
-    num_labels=5
-)
-
-# Load the trained Lightning checkpoint
-ckpt = torch.load("lightning_logs/version_1/checkpoints/epoch=29-step=3030.ckpt", map_location=DEVICE)
-model.load_state_dict(ckpt["state_dict"])
-
-model.to(DEVICE).eval()
-
-# Initialize DETR processor
-processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
-
+# Your class names
+id2label = {0: "cheetah", 1: "elephant", 2: "fox", 3: "lion", 4: "tiger"}
+label2id = {v: k for k, v in id2label.items()}
 
 
 2.
-import os
+# Initialize DETR with the correct number of classes
+model = DetrForObjectDetection.from_pretrained(
+    "facebook/detr-resnet-50",
+    num_labels=len(id2label),
+    ignore_mismatched_sizes=True
+)
+
+# Load your trained weights
+model.load_state_dict(torch.load("detr_5classes.pth"))
+
+# Put model in evaluation mode
+model.eval()
+
+
+
+
+3.
+import torch
+from transformers import DetrForObjectDetection, DetrImageProcessor
 from PIL import Image
+import os
+import random
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
-test_dir = "/kaggle/input/wildcocodataset/wildcocodataset/test"
+# Your classes
+id2label = {0: "cheetah", 1: "elephant", 2: "fox", 3: "lion", 4: "tiger"}
 
-# Get all valid image paths
-image_paths = [
-    os.path.join(test_dir, f)
-    for f in os.listdir(test_dir)
-    if f.lower().endswith((".jpg", ".jpeg", ".png"))
-]
+# Load your trained model
+model = DetrForObjectDetection.from_pretrained(           ----------------------------------Test keo bujaite hobe 6 ta class er jonno kaj korar jnno....
+    "facebook/detr-resnet-50",
+    num_labels=len(id2label),  //6 class values
+    ignore_mismatched_sizes=True                          ----------------------------------Test keo bujaite hobe 6 ta class er jonno kaj korar jnno....
+)
+model.load_state_dict(torch.load("detr_5classes.pth"))
+model.eval()
 
-print(f"Found {len(image_paths)} test images")
+# Load image processor
+image_processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")          --------------default processor of coco....eta lage core framework er ta.........
+
+# Path to your test folder
+test_folder = "/kaggle/input/wildcocodataset/wildcocodataset/test"
+
+# Confidence threshold
+threshold = 0.5
+
+# Get all images and choose 5 random ones
+all_images = [img for img in os.listdir(test_folder) if img.lower().endswith(('.png', '.jpg', '.jpeg'))]
+random_images = random.sample(all_images, min(5, len(all_images)))
+
+# Loop over images
+for img_name in random_images:
+    img_path = os.path.join(test_folder, img_name)
+    img = Image.open(img_path).convert("RGB")
+    width, height = img.size  # get image size
+    
+    # Preprocess
+    inputs = image_processor(images=img, return_tensors="pt")
+
+    # Inference
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    logits = outputs.logits
+    boxes = outputs.pred_boxes
+
+    probs = logits.softmax(-1)
+    scores, labels = probs.max(-1)
+
+    fig, ax = plt.subplots(1, figsize=(12, 8))
+    ax.imshow(img)
+
+    # Draw boxes and labels
+    for batch_idx in range(scores.shape[0]):
+        for i in range(scores.shape[1]):
+            score = scores[batch_idx, i].item()
+            label = labels[batch_idx, i].item()
+            box = boxes[batch_idx, i].tolist()
+
+            # Skip no-object class
+            if label >= len(id2label):
+                continue
+
+            if score > threshold:
+                # DETR boxes are normalized [cx, cy, w, h], we need [x_min, y_min, x_max, y_max]
+                cx, cy, w, h = box
+                x_min = (cx - w/2) * width
+                y_min = (cy - h/2) * height
+                x_max = (cx + w/2) * width
+                y_max = (cy + h/2) * height
+
+                rect = patches.Rectangle(
+                    (x_min, y_min), x_max - x_min, y_max - y_min,
+                    linewidth=2, edgecolor='red', facecolor='none'
+                )
+                ax.add_patch(rect)
+                ax.text(
+                    x_min, y_min - 5, f"{id2label[label]}: {score:.2f}",
+                    color='red', fontsize=12, weight='bold'
+                )
+
+    ax.axis('off')
+    plt.title(f"Predictions for {img_name}")
+    plt.show()
 
 
 
 
-
-
-
-
+-------------------------------------------------------------------------------------------------------------------
 
 3.
 
