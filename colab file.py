@@ -854,6 +854,232 @@ for img_path in image_paths:
 
 
 
+
+
+    =============================================================================================================================================================================================
+                                                            per image details for TP,FP,TN for mAP calculation
+    =============================================================================================================================================================================================
+
+import json
+import os
+import torch
+from transformers import DetrForObjectDetection, DetrImageProcessor
+from PIL import Image, UnidentifiedImageError
+import numpy as np
+from collections import defaultdict
+import warnings
+
+# -------------------------------
+# Setup
+# -------------------------------
+warnings.filterwarnings("ignore")
+
+# Classes
+id2label = {0: "cheetah", 1: "elephant", 2: "fox", 3: "lion", 4: "tiger"}
+
+# Load model
+model = DetrForObjectDetection.from_pretrained(
+    "facebook/detr-resnet-50",
+    num_labels=len(id2label),
+    ignore_mismatched_sizes=True
+)
+model.load_state_dict(torch.load(
+    "/kaggle/input/wild-final-30-epoch/pytorch/default/1/detr_5classes.pth",
+    map_location="cuda"
+))
+model.to("cuda")
+model.eval()
+
+# Load image processor
+image_processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
+
+# Load COCO annotations
+with open("/kaggle/input/wildcocodataset/wildcocodataset/test/_annotations.coco.json", "r") as f:
+    coco_data = json.load(f)
+
+# Ground truth per image
+gt_by_image = defaultdict(list)
+for ann in coco_data['annotations']:
+    image_id = ann['image_id']
+    bbox = ann['bbox']
+    label = id2label[ann['category_id']]
+    gt_by_image[image_id].append((bbox, label))
+
+# Image ID mapping
+image_name_to_id = {img['file_name']: img['id'] for img in coco_data['images']}
+
+# -------------------------------
+# Helper functions
+# -------------------------------
+def compute_iou(box1, box2):
+    x1, y1, w1, h1 = box1
+    x2, y2, w2, h2 = box2
+    box1_x1, box1_y1, box1_x2, box1_y2 = x1, y1, x1 + w1, y1 + h1
+    box2_x1, box2_y1, box2_x2, box2_y2 = x2, y2, x2 + w2, y2 + h2
+    inter_x1 = max(box1_x1, box2_x1)
+    inter_y1 = max(box1_y1, box2_y1)
+    inter_x2 = min(box1_x2, box2_x2)
+    inter_y2 = min(box1_y2, box2_y2)
+    inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+    union_area = (w1 * h1) + (w2 * h2) - inter_area
+    return inter_area / union_area if union_area > 0 else 0.0
+
+def compute_ap(detections, num_gt):
+    if len(detections) == 0:
+        return 0.0
+    detections.sort(key=lambda x: x[0], reverse=True)
+    tp = np.array([x[1] for x in detections])
+    fp = 1 - tp
+    tp_cum = np.cumsum(tp)
+    fp_cum = np.cumsum(fp)
+    precisions = tp_cum / (tp_cum + fp_cum + 1e-8)
+    recalls = tp_cum / (num_gt + 1e-8)
+    ap = 0.0
+    for i in range(1, len(precisions)):
+        ap += (recalls[i] - recalls[i-1]) * precisions[i]
+    return ap
+
+# -------------------------------
+# Evaluation
+# -------------------------------
+test_folder = "/kaggle/input/wildcocodataset/wildcocodataset/test"
+iou_threshold = 0.5
+score_threshold = 0.5
+
+# Two separate detections:
+# standard_detections = all predictions (count FP-lowIoU and duplicates)
+# best_case_detections = ignore FP-lowIoU and duplicates
+standard_detections = defaultdict(list)
+best_case_detections = defaultdict(list)
+num_gt_per_class = defaultdict(int)
+
+for img_name in os.listdir(test_folder):
+    if not img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+        continue
+
+    img_path = os.path.join(test_folder, img_name)
+    try:
+        img = Image.open(img_path).convert("RGB")
+    except UnidentifiedImageError:
+        continue
+
+    image_id = image_name_to_id.get(img_name)
+    if image_id is None:
+        continue
+
+    # -------------------------------
+    # Model inference
+    # -------------------------------
+    inputs = image_processor(images=img, return_tensors="pt").to("cuda")
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    logits = outputs.logits
+    pred_boxes = outputs.pred_boxes
+    probs = logits.softmax(-1)[0, :, :-1]
+    scores, labels = probs.max(-1)
+
+    pred_boxes = pred_boxes[0].detach().cpu().numpy()
+    scores = scores.detach().cpu().numpy()
+    labels = labels.detach().cpu().numpy()
+
+    w, h = img.size
+    boxes_xywh = []
+    for box in pred_boxes:
+        cx, cy, bw, bh = box
+        x = (cx - bw / 2) * w
+        y = (cy - bh / 2) * h
+        bw = bw * w
+        bh = bh * h
+        boxes_xywh.append([x, y, bw, bh])
+    boxes_xywh = np.array(boxes_xywh)
+
+    # Filter predictions by score
+    filtered_preds = [(id2label[labels[i]], scores[i], boxes_xywh[i]) 
+                      for i in range(len(scores)) if scores[i] > score_threshold]
+
+    gts = gt_by_image[image_id]
+    gt_matched = [False] * len(gts)
+
+    # -------------------------------
+    # Logging predictions
+    # -------------------------------
+    pred_iou_status = []
+    print(f"\n✅  ---> Image: {img_name} ---")
+    print(f"Ground Truth ({len(gts)} objects):")
+    for i, (bbox, label) in enumerate(gts):
+        print(f"  GT {i}: {label}, bbox={bbox}")
+
+    print(f"\nPredictions ({len(filtered_preds)} boxes, score>{score_threshold}):")
+    for idx, (label, score, bbox) in enumerate(filtered_preds):
+        best_iou = 0.0
+        best_gt_idx = None
+        # Compute IoU with all GTs
+        for j, (gt_bbox, gt_label) in enumerate(gts):
+            iou = compute_iou(bbox, gt_bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_gt_idx = j
+
+        # Determine status
+        if best_iou < iou_threshold:
+            status = "FP-lowIoU"
+        else:
+            if gt_matched[best_gt_idx]:
+                status = "FP-duplicate"
+            else:
+                status = "TP-best"
+                gt_matched[best_gt_idx] = True  # mark matched
+
+        pred_iou_status.append((idx, label, score, bbox, best_iou, best_gt_idx, status))
+
+    # Print all predictions and prepare detections for AP
+    for idx, label, score, bbox, best_iou, best_gt_idx, status in pred_iou_status:
+        print(f"  Pred {idx}: {label}, score={score:.2f}, bbox={bbox}, IoU={best_iou:.3f}, status={status}")
+
+        # Standard mAP includes all predictions
+        standard_detections[label].append((score, 1 if status.startswith("TP") else 0))
+        # Best-case mAP ignores FP-lowIoU and FP-duplicate
+        if status == "TP-best":
+            best_case_detections[label].append((score, 1))
+
+    # Show unmatched GTs
+    for j, matched in enumerate(gt_matched):
+        if not matched:
+            print(f"  UNMATCHED GT {j}: {gts[j][1]}, bbox={gts[j][0]}")
+
+# Count GTs per class
+for anns in coco_data['annotations']:
+    gt_label = id2label[anns['category_id']]
+    num_gt_per_class[gt_label] += 1
+
+# -------------------------------
+# Compute AP and mAP
+# -------------------------------
+print("\n--- Standard mAP (all FPs counted) ---")
+aps_std = []
+for cls in id2label.values():
+    if num_gt_per_class[cls] == 0:
+        continue
+    ap = compute_ap(standard_detections[cls], num_gt_per_class[cls])
+    aps_std.append(ap)
+    print(f"AP for {cls}: {ap*100:.2f}%")
+map_std = np.mean(aps_std)
+print(f"✅ Mean AP (standard): {map_std*100:.2f}%")
+
+print("\n--- Best-case mAP (ignore duplicates & low-IoU) ---")
+aps_best = []
+for cls in id2label.values():
+    if num_gt_per_class[cls] == 0:
+        continue
+    ap = compute_ap(best_case_detections[cls], num_gt_per_class[cls])
+    aps_best.append(ap)
+    print(f"AP for {cls}: {ap*100:.2f}%")
+map_best = np.mean(aps_best)
+print(f"✅ Mean AP (best-case): {map_best*100:.2f}%")
+
+
+
     =============================================================================================================================================================================================
                                                                                         ckpt vs pth file 
     =============================================================================================================================================================================================
